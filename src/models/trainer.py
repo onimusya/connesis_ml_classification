@@ -5,9 +5,13 @@ from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from src.models.model_factory import create_model, get_hyperparameter_ranges
 from src.utils.logger import handle_error, log_info
+from src.utils.gpu_support import (
+    convert_to_gpu_data, convert_from_gpu_data, 
+    check_gpu_availability, get_device_info
+)
 
 
-def train_model(X, y, model_name, hyperparams, class_weight, enable_tuning, test_size, random_seed):
+def train_model(X, y, model_name, hyperparams, class_weight, enable_tuning, test_size, random_seed, use_gpu=False):
     """Train model with optional hyperparameter tuning"""
     try:
         # Split data
@@ -17,13 +21,33 @@ def train_model(X, y, model_name, hyperparams, class_weight, enable_tuning, test
         
         log_info(f"Split data: {len(X_train)} train, {len(X_test)} test samples")
         
+        # Convert to GPU data if requested
+        if use_gpu:
+            gpu_available, error = check_gpu_availability()
+            if gpu_available:
+                log_info("Converting data to GPU format...")
+                X_train_gpu, y_train_gpu = convert_to_gpu_data(X_train, y_train)
+                X_test_gpu, y_test_gpu = convert_to_gpu_data(X_test, y_test)
+                log_info("Data converted to GPU format successfully")
+            else:
+                log_info(f"GPU not available ({error}), using CPU")
+                use_gpu = False
+                X_train_gpu, y_train_gpu = X_train, y_train
+                X_test_gpu, y_test_gpu = X_test, y_test
+        else:
+            X_train_gpu, y_train_gpu = X_train, y_train
+            X_test_gpu, y_test_gpu = X_test, y_test
+        
         # Create model
-        model = create_model(model_name, hyperparams, class_weight)
+        model = create_model(model_name, hyperparams, class_weight, use_gpu)
         if model is None:
             return None
         
+        device_info = "GPU" if use_gpu else "CPU"
+        log_info(f"Training {model_name} on {device_info}...")
+        
         # Train with or without hyperparameter tuning
-        if enable_tuning:
+        if enable_tuning and not use_gpu:  # Grid search only supported on CPU for now
             param_ranges = get_hyperparameter_ranges()
             param_grid = param_ranges.get(model_name, {})
             
@@ -40,17 +64,26 @@ def train_model(X, y, model_name, hyperparams, class_weight, enable_tuning, test
                     'best_score': grid_search.best_score_
                 }
             else:
-                model.fit(X_train, y_train)
+                model.fit(X_train_gpu, y_train_gpu)
                 best_model = model
                 tuning_info = None
         else:
-            model.fit(X_train, y_train)
+            if enable_tuning and use_gpu:
+                log_info("Grid search not supported with GPU models, training with provided hyperparameters")
+            
+            model.fit(X_train_gpu, y_train_gpu)
             best_model = model
             tuning_info = None
         
-        # Make predictions
-        y_pred = best_model.predict(X_test)
-        y_prob = best_model.predict_proba(X_test)
+        # Make predictions (convert back from GPU if needed)
+        if use_gpu:
+            y_pred = convert_from_gpu_data(best_model.predict(X_test_gpu))
+            y_prob = convert_from_gpu_data(best_model.predict_proba(X_test_gpu))
+            # Also convert test data back to CPU for consistency
+            y_test = convert_from_gpu_data(y_test_gpu)
+        else:
+            y_pred = best_model.predict(X_test)
+            y_prob = best_model.predict_proba(X_test)
         
         # Calculate metrics
         accuracy = accuracy_score(y_test, y_pred)

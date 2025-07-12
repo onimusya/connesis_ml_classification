@@ -4,6 +4,10 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from src.utils.logger import handle_error, log_info
+from src.utils.gpu_support import (
+    check_gpu_availability, create_gpu_model, 
+    get_gpu_supported_models, get_device_info
+)
 
 
 def get_default_hyperparameters():
@@ -26,8 +30,9 @@ def get_default_hyperparameters():
         },
         "SVM": {
             'C': 1.0,
-            'kernel': 'rbf',
-            'gamma': 'scale'
+            'kernel': 'linear',  # Linear is much faster than RBF
+            'gamma': 'scale',
+            'max_iter': 1000    # Limit iterations for faster training
         },
         "Logistic Regression": {
             'C': 1.0,
@@ -61,9 +66,9 @@ def get_hyperparameter_ranges():
             'min_samples_split': [2, 5, 10]
         },
         "SVM": {
-            'C': [0.1, 1, 10, 100],
-            'kernel': ['linear', 'rbf', 'poly'],
-            'gamma': ['scale', 'auto']
+            'C': [0.1, 1, 10],  # Reduced range for faster search
+            'kernel': ['linear', 'rbf'],  # Removed 'poly' which is slow
+            'max_iter': [1000, 2000]  # Control training time
         },
         "Logistic Regression": {
             'C': [0.01, 0.1, 1, 10, 100],
@@ -78,9 +83,19 @@ def get_hyperparameter_ranges():
     }
 
 
-def create_model(model_name, hyperparams, class_weight=False):
+def create_model(model_name, hyperparams, class_weight=False, use_gpu=False):
     """Create model instance with specified hyperparameters"""
     try:
+        # Try GPU first if requested
+        if use_gpu:
+            gpu_model = create_gpu_model(model_name, hyperparams, class_weight)
+            if gpu_model is not None:
+                log_info(f"Created GPU-accelerated {model_name} model")
+                return gpu_model
+            else:
+                log_info(f"GPU model creation failed for {model_name}, falling back to CPU")
+        
+        # Fall back to CPU models
         class_weight_param = 'balanced' if class_weight else None
         
         if model_name == "Decision Tree":
@@ -113,6 +128,8 @@ def create_model(model_name, hyperparams, class_weight=False):
                 C=hyperparams.get('C'),
                 kernel=hyperparams.get('kernel'),
                 gamma=hyperparams.get('gamma', 'scale'),
+                max_iter=hyperparams.get('max_iter', 1000),
+                cache_size=200,  # Increase cache for better performance
                 class_weight=class_weight_param,
                 probability=True,
                 random_state=42
@@ -138,7 +155,8 @@ def create_model(model_name, hyperparams, class_weight=False):
         else:
             raise ValueError(f"Unknown model: {model_name}")
             
-        log_info(f"Created {model_name} model with hyperparameters: {hyperparams}")
+        device_type = "GPU" if use_gpu else "CPU"
+        log_info(f"Created {device_type} {model_name} model with hyperparameters: {hyperparams}")
         return model
         
     except Exception as e:

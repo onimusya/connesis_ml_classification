@@ -10,6 +10,7 @@ A comprehensive machine learning web application built with Streamlit for classi
 
 - 📊 **Data Upload & Preprocessing**: Support for CSV and Excel files with customizable delimiters
 - 🤖 **Multiple ML Algorithms**: Decision Tree, KNN, Random Forest, SVM, Logistic Regression, Gradient Boosting
+- 🚀 **GPU Acceleration**: Optional XGBoost/CatBoost/LightGBM support for faster training (cross-platform compatible)
 - ⚙️ **Hyperparameter Tuning**: Manual configuration and automated grid search
 - 📈 **Comprehensive Evaluation**: Metrics, confusion matrix, ROC curves, feature importance, correlation heatmap
 - 🔮 **Model Deployment**: Save models with timestamps and use for predictions
@@ -29,9 +30,18 @@ cd connesis_ml_classification
 # Install dependencies using uv (recommended)
 uv sync
 
+# For GPU acceleration support (optional)
+uv sync --extra gpu
+
 # Or install with pip
 pip install -e .
 ```
+
+**GPU Support Requirements:**
+- NVIDIA GPU with CUDA support (for optimal performance)
+- XGBoost, CatBoost, and LightGBM (automatically installed with `--extra gpu`)
+- Cross-platform compatible (Windows, Linux, macOS)
+- Supports: Random Forest→XGBoost, Gradient Boosting→XGBoost, SVM→CatBoost, Logistic Regression→LightGBM
 
 ### Running the Application
 
@@ -119,7 +129,8 @@ connesis_ml_classification/
 
 ### Model Training
 - Smart default hyperparameters with frontend controls
-- Automated hyperparameter tuning via Grid Search
+- **GPU/CPU Selection**: Choose between CPU and GPU acceleration for supported models
+- Automated hyperparameter tuning via Grid Search (CPU only)
 - Class weight balancing for imbalanced datasets
 - Configurable train/test splits
 - Reproducible results with random seeds

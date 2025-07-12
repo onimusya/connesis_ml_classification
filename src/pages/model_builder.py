@@ -9,6 +9,10 @@ from src.visualization.plots import (
     plot_roc_curve, plot_correlation_heatmap, get_model_specific_view
 )
 from src.utils.logger import setup_logging, log_info, handle_error
+from src.utils.gpu_support import (
+    check_gpu_availability, get_device_info, 
+    get_gpu_supported_models
+)
 from sklearn.metrics import classification_report
 
 
@@ -24,8 +28,6 @@ def show_model_builder():
         # Show results dashboard if model exists
         if 'model' in st.session_state:
             show_results_dashboard()
-            # Show deployment section for trained model
-            show_deployment_section("trained_model")
     
     # File upload section
     st.sidebar.subheader("📁 Data Upload")
@@ -253,8 +255,60 @@ def show_training_settings():
         help="Seed for reproducible results"
     )
     
+    # GPU/CPU Selection
+    st.sidebar.subheader("🔧 Compute Device")
+    
+    # Check GPU availability
+    gpu_available, gpu_error = check_gpu_availability()
+    device_info = get_device_info()
+    
+    if gpu_available:
+        # Show device selection
+        use_gpu = st.sidebar.radio(
+            "💻 Compute Device",
+            ["CPU", "GPU"],
+            index=0,
+            help="Choose between CPU and GPU acceleration"
+        )
+        
+        # Show GPU info
+        if use_gpu == "GPU":
+            with st.sidebar.expander("🔍 GPU Information"):
+                st.write(f"**GPU Name:** {device_info.get('gpu_name', 'Unknown')}")
+                st.write(f"**GPU Count:** {device_info.get('gpu_count', 0)}")
+                if device_info.get('gpu_memory'):
+                    free_gb = device_info['gpu_memory']['free']
+                    total_gb = device_info['gpu_memory']['total']
+                    st.write(f"**GPU Memory:** {free_gb:.1f} GB free / {total_gb:.1f} GB total")
+                
+                # Show supported models
+                gpu_models = get_gpu_supported_models()
+                st.write(f"**GPU Supported Models:** {', '.join(gpu_models)}")
+                st.write("**Model Mapping:**")
+                st.write("• Random Forest → XGBoost")
+                st.write("• Gradient Boosting → XGBoost") 
+                st.write("• SVM → CatBoost")
+                st.write("• Logistic Regression → LightGBM")
+        
+        use_gpu_bool = (use_gpu == "GPU")
+    else:
+        # GPU not available, show info
+        st.sidebar.info(f"🖥️ CPU Only\n\nGPU not available: {gpu_error}")
+        with st.sidebar.expander("💡 Enable GPU Support"):
+            st.write("To enable GPU acceleration, install boosting libraries:")
+            st.code("uv sync --extra gpu")
+            st.write("Works on Windows, Linux, and macOS with compatible GPUs.")
+            st.write("**GPU Mapping:**")
+            st.write("• Random Forest → XGBoost")
+            st.write("• Gradient Boosting → XGBoost") 
+            st.write("• SVM → CatBoost")
+            st.write("• Logistic Regression → LightGBM")
+        
+        use_gpu_bool = False
+    
     st.session_state.test_size = test_size
     st.session_state.random_seed = random_seed
+    st.session_state.use_gpu = use_gpu_bool
 
 
 def show_model_selection():
@@ -268,6 +322,13 @@ def show_model_selection():
         model_list,
         help="Choose the machine learning algorithm"
     )
+    
+    # Check GPU compatibility
+    use_gpu = st.session_state.get('use_gpu', False)
+    gpu_supported_models = get_gpu_supported_models()
+    
+    if use_gpu and model_name not in gpu_supported_models:
+        st.sidebar.warning(f"⚠️ {model_name} does not support GPU acceleration. Will use CPU instead.")
     
     # Get default hyperparameters
     default_hyperparams = get_default_hyperparameters()[model_name]
@@ -287,6 +348,10 @@ def show_model_selection():
         "🔍 Enable Hyperparameter Tuning (Grid Search)",
         help="Automatically find the best hyperparameters"
     )
+    
+    # Show tuning warning for GPU
+    if enable_tuning and use_gpu:
+        st.sidebar.warning("⚠️ Grid search is not supported with GPU models. Will use manual hyperparameters.")
     
     # Store in session state
     st.session_state.model_name = model_name
@@ -340,11 +405,15 @@ def show_hyperparameter_controls(model_name, default_hyperparams):
         )
         hyperparams['kernel'] = st.sidebar.selectbox(
             "🔧 Kernel", ["linear", "rbf", "poly"],
-            index=1 if default_hyperparams['kernel'] == 'rbf' else 0
+            index=0 if default_hyperparams['kernel'] == 'linear' else 1
         )
         hyperparams['gamma'] = st.sidebar.selectbox(
             "📊 Gamma", ["scale", "auto"],
             index=0
+        )
+        hyperparams['max_iter'] = st.sidebar.slider(
+            "🔄 Maximum Iterations", 100, 5000, default_hyperparams['max_iter'],
+            help="Limit training time - lower values train faster"
         )
         
     elif model_name == "Logistic Regression":
@@ -400,7 +469,8 @@ def train_and_show_results():
                 st.session_state.class_weight,
                 st.session_state.enable_tuning,
                 st.session_state.test_size,
-                st.session_state.random_seed
+                st.session_state.random_seed,
+                st.session_state.get('use_gpu', False)
             )
             
             if results is None:
@@ -464,8 +534,8 @@ def show_results_dashboard():
     with tab5:
         show_model_specific_view()
     
-    # Deploy button
-    show_deployment_section("results_dashboard")
+    # Deploy button (single deployment section for all contexts)
+    show_deployment_section()
 
 
 def show_evaluation_metrics():
@@ -676,7 +746,7 @@ def deploy_model():
         handle_error(e, "Error deploying model")
 
 
-def show_deployment_section(context="default"):
+def show_deployment_section(context="model_builder"):
     """Display model deployment section"""
     st.subheader("🚀 Model Deployment")
     
@@ -686,17 +756,16 @@ def show_deployment_section(context="default"):
         return
     
     # Debug: Log session state on every render
-    log_info(f"Deployment section render ({context}) - Session state keys: {list(st.session_state.keys())}")
+    log_info(f"Deployment section render - Session state keys: {list(st.session_state.keys())}")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        # Use context-specific unique key for the button
-        button_key = f"deploy_model_btn_{context}"
-        deploy_clicked = st.button("💾 Deploy Model", type="primary", key=button_key)
+        # Use a single consistent key for the deploy button
+        deploy_clicked = st.button("💾 Deploy Model", type="primary", key="deploy_model_button")
         
         if deploy_clicked:
-            log_info(f"Deploy button clicked ({context}) - starting deployment process")
+            log_info(f"Deploy button clicked - starting deployment process")
             # Immediately store a flag to indicate deployment is in progress
             st.session_state.deploying = True
             deploy_model()
