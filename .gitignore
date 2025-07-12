@@ -165,8 +165,11 @@ cython_debug/
 .streamlit/
 
 # Project specific ignores
-models/
-logs/
+# Ignore the models directory at root level (where trained models are saved)
+/models/
+# Ignore logs directory
+/logs/
+# Ignore specific model files anywhere
 *.pkl
 *.joblib
 
